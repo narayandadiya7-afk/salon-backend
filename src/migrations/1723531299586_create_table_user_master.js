@@ -1,0 +1,26 @@
+module.exports = {
+  up: `CREATE TABLE IF NOT EXISTS user_master (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    usertype SMALLINT,
+    username VARCHAR(500) NOT NULL,
+    userparentid INT,
+    displayname VARCHAR(500) NOT NULL,
+    emailid VARCHAR(500) NOT NULL,
+    mobileno VARCHAR(100) NOT NULL,
+    password VARCHAR(200) NOT NULL,
+    previous_pwd VARCHAR(100),
+    ismaster SMALLINT NOT NULL DEFAULT 0,
+    org_id INT,
+    user_org_id INT DEFAULT 0,
+    createdon TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    createdby INT DEFAULT 0,
+    updatedon TIMESTAMP NULL DEFAULT NULL,
+    updatedby INT DEFAULT NULL,
+    isdeleted TINYINT NOT NULL DEFAULT 0,
+    deletedon TIMESTAMP NULL DEFAULT NULL,
+    deletedby INT DEFAULT NULL,
+    isinactive INT DEFAULT 0,
+    PRIMARY KEY (id)
+);`,
+  down: `DROP TABLE IF EXISTS user_master`,
+};

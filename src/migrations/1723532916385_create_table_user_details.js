@@ -1,0 +1,27 @@
+module.exports = {
+  up: `CREATE TABLE IF NOT EXISTS user_details (
+    id BIGINT NOT NULL AUTO_INCREMENT,
+    userid BIGINT NOT NULL,
+    name VARCHAR(255),
+    firm_name VARCHAR(255),
+    reg_date TIMESTAMP NULL DEFAULT NULL,
+    registration_no VARCHAR(255),
+    email VARCHAR(50),
+    mobile VARCHAR(20),
+    current_addr VARCHAR(500),
+    permanent_addr VARCHAR(500),
+    country SMALLINT,
+    district SMALLINT,
+    region SMALLINT,
+    zipcode VARCHAR(20),
+    createdon TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    createdby INT DEFAULT 0,
+    updatedon TIMESTAMP NULL DEFAULT NULL,
+    updatedby INT DEFAULT NULL,
+    isdeleted TINYINT NOT NULL DEFAULT 0,
+    deletedon TIMESTAMP NULL DEFAULT NULL,
+    deletedby INT DEFAULT NULL,
+    PRIMARY KEY (id)
+);`,
+  down: `DROP TABLE IF EXISTS user_details`,
+};

@@ -1,0 +1,457 @@
+// This is your Prisma schema file for the Salon SaaS Platform
+// Multi-tenant architecture with shared database and tenantId isolation
+
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "library"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum UserRole {
+  SUPER_ADMIN
+  OWNER
+  TENANT_ADMIN
+  STAFF
+  USER
+  ADMIN
+  SALON_OWNER
+  CUSTOMER
+}
+
+enum PlanType {
+  BASIC
+  PRO
+  PRO_YEARLY
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum AppointmentStatus {
+  BOOKED
+  CANCELLED
+  COMPLETED
+  NO_SHOW
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  TRIAL
+  SUSPENDED
+}
+
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  ACCESS_DENIED
+  PAYMENT
+}
+
+// ─────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────
+
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  password      String
+  name          String
+  phone         String?
+  role          UserRole @default(USER)
+  tenantId      String?
+  isVerified    Boolean  @default(false)
+  deletedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  salon         Salon?   @relation("OwnedSalon")
+  tenant        Salon?   @relation("TenantUsers", fields: [tenantId], references: [id], onDelete: Cascade)
+  appointments  Appointment[]
+  payments      Payment[]
+  userRoles     UserRoleMapping[]
+  refreshTokens RefreshToken[]
+  customerProfile CustomerProfile?
+  auditLogs     AuditLog[]
+
+  @@index([tenantId])
+  @@index([role])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────
+// SALON (TENANT)
+// ─────────────────────────────────────────────
+
+model Salon {
+  id                  String             @id @default(cuid())
+  ownerId             String             @unique
+  name                String
+  slug                String             @unique
+  subdomain           String?            @unique
+  customDomain        String?            @unique
+  description         String?
+  address             String?
+  city                String?
+  state               String?
+  phone               String?
+  email               String?
+  logoUrl             String?
+  bannerUrl           String?
+  
+  // Subscription
+  planType            PlanType           @default(BASIC)
+  subscriptionStatus  SubscriptionStatus @default(TRIAL)
+  subscriptionExpiry  DateTime?
+  
+  // Working hours (JSON stored as string)
+  workingHours        String?   @db.Text
+  slotDurationMinutes Int                @default(30)
+  
+  // Theme customization
+  primaryColor        String?            @default("#1890ff")
+  settings            Json?
+  featureFlags        Json?
+  
+  isActive            Boolean            @default(true)
+  deletedAt           DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  // Relations
+  owner               User               @relation("OwnedSalon", fields: [ownerId], references: [id])
+  users               User[]             @relation("TenantUsers")
+  roles               Role[]
+  services            Service[]
+  appointments        Appointment[]
+  payments            Payment[]
+  timeSlots           TimeSlot[]
+  staff               Staff[]
+  subscriptions       Subscription[]
+  notifications       Notification[]
+  customerProfiles    CustomerProfile[]
+  auditLogs           AuditLog[]
+
+  @@index([slug])
+  @@index([subdomain])
+  @@index([customDomain])
+  @@index([subscriptionStatus])
+  @@map("salons")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  deletedAt   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Salon?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+  users       UserRoleMapping[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles       RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime   @default(now())
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRoleMapping {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  userId    String
+  roleId    String
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, userId, roleId])
+  @@index([tenantId])
+  @@index([userId])
+  @@map("user_roles")
+}
+
+// ─────────────────────────────────────────────
+// SERVICE
+// ─────────────────────────────────────────────
+
+model Service {
+  id           String   @id @default(cuid())
+  salonId      String
+  tenantId     String
+  name         String
+  description  String?
+  price        Float
+  duration     Int      // in minutes
+  category     String?
+  imageUrl     String?
+  isActive     Boolean  @default(true)
+  deletedAt    DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  salon        Salon         @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  appointments Appointment[]
+
+  @@index([tenantId])
+  @@index([salonId, isActive])
+  @@map("services")
+}
+
+// ─────────────────────────────────────────────
+// TIME SLOT (Availability)
+// ─────────────────────────────────────────────
+
+model TimeSlot {
+  id          String   @id @default(cuid())
+  salonId     String
+  tenantId    String
+  dayOfWeek   Int      // 0=Sunday, 1=Monday, ..., 6=Saturday
+  startTime   String   // "09:00"
+  endTime     String   // "18:00"
+  isAvailable Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  salon       Salon    @relation(fields: [salonId], references: [id], onDelete: Cascade)
+
+  @@unique([salonId, dayOfWeek])
+  @@index([tenantId])
+  @@map("time_slots")
+}
+
+// ─────────────────────────────────────────────
+// APPOINTMENT
+// ─────────────────────────────────────────────
+
+model Appointment {
+  id             String            @id @default(cuid())
+  salonId        String
+  tenantId       String
+  serviceId      String
+  customerId     String?
+  customerName   String
+  customerEmail  String
+  customerPhone  String
+  appointmentDate DateTime
+  startTime      String            // "10:00"
+  endTime        String            // "10:30"
+  status         AppointmentStatus @default(BOOKED)
+  notes          String?
+  deletedAt      DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  // Relations
+  salon          Salon             @relation(fields: [salonId], references: [id], onDelete: Cascade)
+  service        Service           @relation(fields: [serviceId], references: [id])
+  customer       User?             @relation(fields: [customerId], references: [id])
+
+  @@index([tenantId])
+  @@index([salonId, appointmentDate])
+  @@index([customerId])
+  @@map("appointments")
+}
+
+// ─────────────────────────────────────────────
+// PAYMENT / SUBSCRIPTION
+// ─────────────────────────────────────────────
+
+model Payment {
+  id                String        @id @default(cuid())
+  userId            String
+  salonId           String?
+  tenantId          String?
+  razorpayOrderId   String?       @unique
+  razorpayPaymentId String?       @unique
+  razorpaySignature String?
+  amount            Float         // in INR
+  currency          String        @default("INR")
+  planType          PlanType
+  status            PaymentStatus @default(PENDING)
+  webhookVerified   Boolean       @default(false)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+
+  // Relations
+  user              User          @relation(fields: [userId], references: [id])
+  salon             Salon?        @relation(fields: [salonId], references: [id])
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("payments")
+}
+
+model Staff {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String?
+  name      String
+  email     String?
+  phone     String?
+  title     String?
+  bio       String?
+  imageUrl  String?
+  isActive  Boolean  @default(true)
+  deletedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Salon    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("staff")
+}
+
+model Plan {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  name        String
+  description String?
+  priceMonthly Float
+  priceYearly  Float?
+  trialDays    Int     @default(14)
+  features     Json?
+  isActive     Boolean @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@map("plans")
+}
+
+model Subscription {
+  id          String             @id @default(cuid())
+  tenantId    String
+  planId      String?
+  status      SubscriptionStatus @default(TRIAL)
+  startsAt    DateTime           @default(now())
+  expiresAt   DateTime?
+  renewedAt   DateTime?
+  cancelledAt DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  tenant      Salon              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan        Plan?              @relation(fields: [planId], references: [id])
+
+  @@index([tenantId])
+  @@index([status])
+  @@map("subscriptions")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String?
+  title     String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  tenant    Salon    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@map("notifications")
+}
+
+model CustomerProfile {
+  id        String   @id @default(cuid())
+  tenantId  String
+  userId    String   @unique
+  notes     String?
+  tags      String[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tenant    Salon    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("customer_profiles")
+}
+
+model RefreshToken {
+  id           String   @id @default(cuid())
+  userId       String
+  tokenHash    String   @unique
+  replacedById String?
+  revokedAt    DateTime?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model AuditLog {
+  id        String      @id @default(cuid())
+  tenantId  String?
+  userId    String?
+  action    AuditAction
+  entity    String?
+  entityId  String?
+  metadata  Json?
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime    @default(now())
+
+  tenant    Salon?      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  user      User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([action])
+  @@map("audit_logs")
+}
