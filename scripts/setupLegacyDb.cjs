@@ -166,8 +166,6 @@ async function setup() {
       return;
     }
 
-    console.log('Seeding menu hierarchy...');
-
     await sequelize.query(`
       INSERT INTO "userManagement"."menuhierarchy" (name, disp_name, parent_id, entity_url, description, is_active, org_id, icon_name, display_order, createdby)
       VALUES
