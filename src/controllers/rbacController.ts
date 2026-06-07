@@ -49,15 +49,14 @@ export const saveTenantRole = async (req: Request, res: Response) => {
   }
 };
 
-export const assignTenantRole = async (req: Request, res: Response) => {
-  const tenantId = getTenantId(req);
+export const assignRole = async (req: Request, res: Response) => {
   const { userId, roleId } = req.body;
-  if (!tenantId || !userId || !roleId) {
+  if (!userId || !roleId) {
     const dto = new BaseResponse(CommonUtils.getDataResponse(eReturnCodes.R_INVALID_DATA));
-    dto.dataResponse.description = "tenantId, userId and roleId are required";
+    dto.dataResponse.description = "userId and roleId are required";
     res.status(400).json(dto);
     return;
   }
-  const result = await rbacService.assignRole(tenantId, userId, roleId);
+  const result = await rbacService.assignRole(userId, roleId);
   res.status(isSuccess(result) ? 200 : 400).json(result);
 };

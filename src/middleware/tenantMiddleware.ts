@@ -1,7 +1,19 @@
 import { Request, Response, NextFunction } from "express";
 import authService from "../services/authService";
 import prisma from "../database/prismaClient";
-import { SubscriptionStatus, UserRole } from "@prisma/client";
+import { SubscriptionStatus } from "@prisma/client";
+
+// Role name constants for authorization (replaces UserRole enum dependency)
+export const ROLES = {
+  SUPER_ADMIN: "SUPER_ADMIN",
+  ADMIN: "ADMIN",
+  OWNER: "OWNER",
+  SALON_OWNER: "SALON_OWNER",
+  TENANT_ADMIN: "TENANT_ADMIN",
+  STAFF: "STAFF",
+  USER: "USER",
+  CUSTOMER: "CUSTOMER",
+} as const;
 import CommonUtils from "../utils/common";
 import { eReturnCodes } from "../enums/commonEnums";
 
@@ -12,7 +24,7 @@ declare global {
       user?: {
         id: string;
         email: string;
-        role: UserRole;
+        role: string;
         tenantId?: string | null;
         roles?: string[];
         permissions?: string[];
@@ -105,15 +117,19 @@ export const optionalAuthenticate = (req: Request, _res: Response, next: NextFun
 
 /**
  * Role-based authorization middleware
+ * Accepts role name strings (e.g. "SALON_OWNER", "ADMIN")
  */
-export const authorize = (...roles: UserRole[]) => {
+export const authorize = (...roles: string[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
       const dto = { dataResponse: CommonUtils.getDataResponse(eReturnCodes.R_AUTHENTICATION_FAILED), data: [] };
       res.status(401).json(dto);
       return;
     }
-    if (!roles.includes(req.user.role)) {
+    // Check both the primary role and the roles array
+    const hasRole = roles.includes(req.user.role) ||
+                    req.user.roles?.some((r) => roles.includes(r));
+    if (!hasRole) {
       const dto = { dataResponse: CommonUtils.getDataResponse(eReturnCodes.R_UNAUTHORIZED), data: [] };
       dto.dataResponse.description = "Insufficient permissions";
       res.status(403).json(dto);
@@ -130,12 +146,9 @@ export const requirePermission = (...permissions: string[]) => {
       res.status(401).json(dto);
       return;
     }
-    if (
-      req.user.role === UserRole.SUPER_ADMIN ||
-      req.user.role === UserRole.ADMIN ||
-      req.user.role === UserRole.OWNER ||
-      req.user.role === UserRole.SALON_OWNER
-    ) {
+    // Power roles bypass permission checks
+    const powerRoles: string[] = [ROLES.SUPER_ADMIN, ROLES.ADMIN, ROLES.OWNER, ROLES.SALON_OWNER];
+    if (powerRoles.includes(req.user.role) || req.user.roles?.some((r) => powerRoles.includes(r))) {
       next();
       return;
     }

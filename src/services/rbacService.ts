@@ -74,19 +74,12 @@ class RbacService {
     }
   }
 
-  async assignRole(tenantId: string, userId: string, roleId: string) {
+  async assignRole(userId: string, roleId: string) {
     const dto = new BaseResponse(CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS));
     try {
-      const role = await prisma.role.findFirst({ where: { id: roleId, tenantId, deletedAt: null } });
-      if (!role) {
-        dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
-        return dto;
-      }
-
-      await prisma.userRoleMapping.upsert({
-        where: { tenantId_userId_roleId: { tenantId, userId, roleId } },
-        create: { tenantId, userId, roleId },
-        update: {},
+      await prisma.user.update({
+        where: { id: userId },
+        data: { roleId },
       });
 
       return dto;

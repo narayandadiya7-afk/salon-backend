@@ -1,137 +1,84 @@
-import { Op } from "sequelize";
+import prisma from "../database/prismaClient";
 import logger from "../logger";
 import CommonUtils from "../utils/common";
-import { sequelize } from "../database/db";
 import { eReturnCodes } from "../enums/commonEnums";
 import RequestModel from "../modules/common/models/requestModel";
-import Privileges from "../models/rolemodels/privilegesMaster";
 import CommonRequestModel from "../modules/common/models/commonRequestModel";
-import RolePrivilegesMapping from "../models/rolemodels/rolePrivilegesMapping";
-import { RoleMaster, RoleMasterModelDTO } from "../modules/userManagement/models/roleModels/roleMaster";
-
+import { RoleMasterModelDTO } from "../models/common/dto";
 
 class RoleManagement {
-  /**
-   * Retrieves the list of roles based on the provided request data.
-   * Supports pagination and search functionality.
-   * @param {RequestModel} req - Request data containing pagination and search parameters.
-   * @returns {Promise<RoleMasterModelDTO>} - A promise resolving to a RoleMasterModelDTO containing the list of roles.
-   */
   public async getRoleList(req: RequestModel): Promise<RoleMasterModelDTO> {
-    // Initialize RoleMasterModelDTO with a success response
     const roleDTO: RoleMasterModelDTO = new RoleMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
 
-    // Initialize filter model from request data
     const filterModel: CommonRequestModel = { ...req.data };
-    // Calculate offset and limit for pagination
     const offset = (filterModel.currentPage - 1) * filterModel.pageSize;
     const limit = filterModel.pageSize;
 
     try {
+      filterModel.totalRows = await prisma.role.count({ where: { deletedAt: null } });
 
-      // Get total count of roles
-      filterModel.totalRows = await RoleMaster.count();
+      const where: any = { deletedAt: null };
+      if (filterModel.searchText) {
+        where.OR = [
+          { name: { contains: filterModel.searchText, mode: 'insensitive' } },
+          { description: { contains: filterModel.searchText, mode: 'insensitive' } },
+        ];
+      }
 
-      const roles = filterModel.searchText
-        // Fetch roles based on search text if provided
-        ? await RoleMaster.findAndCountAll({
-          where: {
-            [Op.or]: {
-              name: {
-                [Op.like]: filterModel.searchText + "%",
-              },
-              description: {
-                [Op.like]: filterModel.searchText + "%",
-              },
-              isdeleted: 0
-            },
-          },
-          offset,
-          limit,
-          order: [["id", "DESC"]],
-        })
-        : await RoleMaster.findAndCountAll({
-          where: { isdeleted: 0 },
-          offset,
-          limit,
-          order: [["id", "DESC"]], // Order roles by ID in descending order
-        });
+      const roles = await prisma.role.findMany({
+        where,
+        skip: offset,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+        include: { permissions: { include: { permission: true } } },
+      });
 
-
-
-      filterModel.filterRowsCount = roles.rows.length;
-      // Set filter rows count and roles data in response
-      roleDTO.data = roles.rows;
+      filterModel.filterRowsCount = roles.length;
+      roleDTO.data = roles;
       roleDTO.filterModel = filterModel;
       return roleDTO;
     } catch (error: any) {
       logger.info(error.message);
-      // Log the error and set error response in case of a database error
       roleDTO.data = [];
       roleDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DB_ERROR);
       return roleDTO;
     }
   }
 
-
-  /**
-   * Add or edit role
-   * @param req RequestModel object containing the role details and its associated privileges
-   * @returns RoleMasterModelDTO containing the role and its associated privileges
-   */
   public async addEditRole(req: RequestModel): Promise<RoleMasterModelDTO> {
     const roleDTO: RoleMasterModelDTO = new RoleMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
 
-
-    // Local Variables Declaration
     const roleId = req.data.id;
-    const rolePrivilegesArray = req.data.rolePrivileges;
-    const t = await sequelize.transaction();     // Transaction started and variable initialized
-
+    const rolePrivilegesArray: { id: string }[] = req.data.rolePrivileges || [];
 
     try {
-
-      // If not roleId CreateNew else UpdateExisting
       if (!roleId) {
-
-        // Create a new role
-        const newRole = await RoleMaster.create({
-          name: req.data.name,
-          roleUniqueId: req.data.roleUniqueId,
-          description: req.data.description,
-          createdby: req.auth_token.userId
-        }, { transaction: t });
-
-        /**
-         * Create new role privileges mapping using the provided rolePrivilegesArray
-         * @param rolePrivilegesArray array of privilege objects with id property
-         * @returns array of newly created role privileges mapping
-         */
-
-        const newRolePrivilegesMapping = await RolePrivilegesMapping.bulkCreate(
-          rolePrivilegesArray.map((privilege: any) => ({
-            roleId: newRole.id,
-            privilegeId: privilege.id,
-            createdby: req.auth_token.userId
-          })),
-          { transaction: t }
-        );
-
-
-        roleDTO.data = { newRole, newRolePrivilegesMapping };
-      } else if (roleId > 0) {
-
-        // Retrieve existing role
-        const existingRole = await RoleMaster.findOne({
-          where: {
-            isdeleted: 0,
-            id: roleId
-          }
+        const newRole = await prisma.role.create({
+          data: {
+            name: req.data.name,
+            description: req.data.description || "",
+            displayName: req.data.name,
+            isSystem: false,
+            createdBy: String(req.auth_token.userId),
+          },
         });
+
+        if (rolePrivilegesArray.length > 0) {
+          await prisma.rolePermission.createMany({
+            data: rolePrivilegesArray.map((p: any) => ({
+              roleId: newRole.id,
+              permissionId: String(p.id),
+            })),
+          });
+        }
+
+        roleDTO.data = { newRole };
+      } else {
+        const existingRole = await prisma.role.findUnique({ where: { id: String(roleId) } });
 
         if (!existingRole) {
           roleDTO.data = [];
@@ -139,98 +86,64 @@ class RoleManagement {
           return roleDTO;
         }
 
-        // Destroy existing role privileges mapping  
-        // Destoye existing role privileges mapping  
-        await RolePrivilegesMapping.destroy(
-          {
-            where: {
-              isdeleted: 0,
-              roleId: roleId,
-            },
-            transaction: t,
-          }
-        );
+        await prisma.role.update({
+          where: { id: String(roleId) },
+          data: {
+            name: req.data.name,
+            description: req.data.description || "",
+            displayName: req.data.name,
+            updatedBy: String(req.auth_token.userId),
+          },
+        });
 
-        // UpdateRoleMaster 
-        const updatedRole = await existingRole.update({
-          name: req.data.name,
-          roleUniqueId: req.data.roleUniqueId,
-          description: req.data.description,
-          updatedby: req.auth_token.userId,
-          updatedon: new Date()
-        }, { transaction: t });
+        await prisma.rolePermission.deleteMany({ where: { roleId: String(roleId) } });
 
-        /**
-        const newRolePrivilegesMapping = await RolePrivilegesMapping.bulkCreate(
-         * Create new role privileges mapping using the provided rolePrivilegesArray
-         * @param rolePrivilegesArray array of privilege objects with id property
-         * @returns array of newly created role privileges mapping
-         */
-        const newRolePrivilegesMapping = await RolePrivilegesMapping.bulkCreate(
-          rolePrivilegesArray.map((privilege: any) => ({
-            roleId: roleId,
-            privilegeId: privilege.id,
-            createdby: req.auth_token.userId
-          })),
-          { transaction: t }
-        );
+        if (rolePrivilegesArray.length > 0) {
+          await prisma.rolePermission.createMany({
+            data: rolePrivilegesArray.map((p: any) => ({
+              roleId: String(roleId),
+              permissionId: String(p.id),
+            })),
+          });
+        }
 
-        // return updated data - RoleMaster & RolePrivilegesMapping
-        roleDTO.data = { updatedRole, newRolePrivilegesMapping };
+        roleDTO.data = { updatedRole: existingRole };
       }
 
-      //Commit the transaction
-      await t.commit();
       roleDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS);
       return roleDTO;
     } catch (error: any) {
-      // Rollback the transaction
-      roleDTO.data = [];
-      await t.rollback();
       logger.info(error.message);
+      roleDTO.data = [];
       roleDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DB_ERROR);
       return roleDTO;
     }
   }
 
-
-  /**
-   * Retrieves a specific role by id and its associated privileges
-   * @param req RequestModel object containing the id of the role to be retrieved
-   * @returns RoleMasterModelDTO containing the role and its associated privileges
-   */
   public async getSpecificRole(req: RequestModel): Promise<RoleMasterModelDTO> {
     const roleDTO: RoleMasterModelDTO = new RoleMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND)
     );
 
     try {
-      // Retrieve the role and its associated privileges
-      const specificRole: RoleMaster | null = await RoleMaster.findByPk(
-        req.data.id,
-        {
-          include: [
-            {
-              model: Privileges,
-              as: "roleprivileges",
-              where: { isdeleted: 0 }, // only include active privileges
-              through: {
-                attributes: [], // exclude attributes from the join table
-              },
-            },
-          ],
-          order: [[{ model: Privileges, as: "roleprivileges" }, "id", "ASC"]], // order privileges by ID in ascending order
-        }
-      );
+      const role = await prisma.role.findUnique({
+        where: { id: String(req.data.id) },
+        include: {
+          permissions: {
+            include: { permission: true },
+            orderBy: { permission: { createdAt: "asc" } },
+          },
+        },
+      });
 
-      if (!specificRole) {
+      if (!role) {
         roleDTO.data = [];
         roleDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
         return roleDTO;
       }
 
-      // Return the role and its associated privileges
-      roleDTO.data = specificRole;
+      roleDTO.data = role;
+      roleDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS);
       return roleDTO;
     } catch (error: any) {
       logger.info(error.message);
@@ -239,5 +152,34 @@ class RoleManagement {
     }
   }
 
+  public async deleteRole(req: RequestModel): Promise<RoleMasterModelDTO> {
+    const roleDTO: RoleMasterModelDTO = new RoleMasterModelDTO(
+      CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
+    );
+
+    try {
+      const existingRole = await prisma.role.findUnique({ where: { id: String(req.data.id) } });
+
+      if (!existingRole) {
+        roleDTO.data = [];
+        roleDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
+        return roleDTO;
+      }
+
+      await prisma.role.update({
+        where: { id: String(req.data.id) },
+        data: { deletedAt: new Date(), updatedBy: String(req.auth_token?.userId) },
+      });
+
+      roleDTO.data = "Role deleted successfully";
+      return roleDTO;
+    } catch (error: any) {
+      logger.info(error.message);
+      roleDTO.data = [];
+      roleDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DB_ERROR);
+      return roleDTO;
+    }
+  }
 }
+
 export default new RoleManagement();

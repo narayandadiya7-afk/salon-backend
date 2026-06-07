@@ -1,5 +1,5 @@
 import prisma from "../database/prismaClient";
-import { PlanType, SubscriptionStatus, UserRole } from "@prisma/client";
+import { PlanType, SubscriptionStatus } from "@prisma/client";
 import { z } from "zod";
 import logger from "../logger";
 import CommonUtils from "../utils/common";
@@ -72,7 +72,7 @@ class SalonService {
         include: { owner: { select: { id: true, name: true, email: true } } },
       });
 
-      await prisma.user.update({ where: { id: ownerId }, data: { role: UserRole.OWNER, tenantId: salon.id } });
+      await prisma.user.update({ where: { id: ownerId }, data: { tenantId: salon.id } });
       await this.initializeDefaultRoles(salon.id, ownerId);
       await this.createDefaultWorkingHours(salon.id);
 
@@ -325,20 +325,19 @@ class SalonService {
     );
 
     const role = await prisma.role.upsert({
-      where: { tenantId_name: { tenantId, name: "Owner" } },
+      where: { tenantId_name: { tenantId, name: "SALON_OWNER" } },
       create: {
         tenantId,
-        name: "Owner",
+        name: "SALON_OWNER",
         isSystem: true,
         permissions: { create: permissions.map((p) => ({ permissionId: p.id })) },
       },
       update: {},
     });
 
-    await prisma.userRoleMapping.upsert({
-      where: { tenantId_userId_roleId: { tenantId, userId: ownerId, roleId: role.id } },
-      create: { tenantId, userId: ownerId, roleId: role.id },
-      update: {},
+    await prisma.user.update({
+      where: { id: ownerId },
+      data: { roleId: role.id },
     });
   }
 }

@@ -5,7 +5,6 @@ const passport = require("passport");
 const session = require("express-session");
 const swaggerUi = require("swagger-ui-express");
 const swaggerFile = require("./swagger-output.json");
-import setupAssociations from "./models/associations";
 import { sourcePlatformMiddleware } from "./middleware/sourcePlatformMiddleware";
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 
@@ -68,7 +67,5 @@ passport.serializeUser((user: any, done: any) => {
 passport.deserializeUser((obj: any, done: any) => {
   done(null, obj);
 });
-
-setupAssociations();
 
 export default app;

@@ -1,57 +1,53 @@
+import prisma from "../database/prismaClient";
 import logger from "../logger";
 const jwt = require("jsonwebtoken");
-const { Op } = require("sequelize");
 import CommonUtils from "../utils/common";
 import { TEmailOptions } from "../types/common";
 import { eReturnCodes } from "../enums/commonEnums";
 import RequestModel from "../modules/common/models/requestModel";
-import { UserDetails } from "../modules/userManagement/models/userModels/userDetails";
-import { RoleMaster } from "../modules/userManagement/models/roleModels/roleMaster";
 import CommonRequestModel from "../modules/common/models/commonRequestModel";
-import { UserMasterModelDTO, UserMaster } from "../modules/userManagement/models/userModels/userMaster";
+import { UserMasterModelDTO } from "../models/common/dto";
 
 
 class UserManagement {
-  /**
-   * @description Get users list
-   * @param {RequestModel} req - Request data
-   * @returns {Promise<UserMasterModelDTO>} - UserMasterModelDTO containing list of users
-   */
   public async getUsers(req: RequestModel): Promise<UserMasterModelDTO> {
     const userDTO: UserMasterModelDTO = new UserMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
 
-    // Initialize filter model
     const filterModel: CommonRequestModel = { ...req.data };
-    // Calculate offset and limit
     const offset = (filterModel.currentPage - 1) * filterModel.pageSize;
     const limit = filterModel.pageSize;
 
     try {
+      filterModel.totalRows = await prisma.user.count({ where: { deletedAt: null } });
 
-      // Get total count of records
-      filterModel.totalRows = await UserMaster.count();
+      const where: any = { deletedAt: null };
+      if (filterModel.searchText) {
+        where.OR = [
+          { name: { contains: filterModel.searchText, mode: 'insensitive' } },
+          { email: { contains: filterModel.searchText, mode: 'insensitive' } },
+        ];
+      }
 
-      // Get records based on search text
-      const users = filterModel.searchText
-        ? await UserMaster.findAndCountAll({
-          where: {
-            userName: {
-              [Op.like]: filterModel.searchText + "%",
-            },
-            displayName: {
-              [Op.like]: filterModel.searchText + "%",
-            },
-            isdeleted: 0
-          },
-          offset,
-          limit,
-        })
-        : await UserMaster.findAndCountAll({ where: { isdeleted: 0 }, offset, limit });
+      const users = await prisma.user.findMany({
+        where,
+        skip: offset,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+        include: { roleRef: { select: { id: true, name: true, displayName: true } } },
+      });
 
-      filterModel.filterRowsCount = users.rows.length;
-      userDTO.data = users.rows;
+      filterModel.filterRowsCount = users.length;
+      userDTO.data = users.map(({ password, roleRef, ...rest }) => ({
+        id: rest.id,
+        userName: rest.name,
+        emailId: rest.email,
+        mobileNumber: rest.phone || "",
+
+        roleName: roleRef?.name || "USER",
+        roleId: rest.roleId,
+      }));
       userDTO.filterModel = filterModel;
       return userDTO;
     } catch (error: any) {
@@ -62,78 +58,102 @@ class UserManagement {
     }
   }
 
-  /**
-   * @description Add or edit user
-   * @param {RequestModel} req - Request data
-   * @returns {Promise<UserMasterModelDTO>} - UserMasterModelDTO containing user data
-   */
   public async addEditUser(req: RequestModel): Promise<UserMasterModelDTO> {
     const userDTO: UserMasterModelDTO = new UserMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
 
     const id = req.data.id;
+    let adminId: string | undefined;
 
     try {
+      if (req.auth_token.emailId) {
+        const admin = await prisma.user.findUnique({ where: { email: req.auth_token.emailId } });
+        if (admin) adminId = admin.id;
+      }
+    } catch {}
 
+    try {
       if (!id) {
-        // Create a new user
-        const newUser = await UserMaster.create({
-          userName: req.data.userName,
-          displayName: req.data.displayName,
-          emailId: req.data.emailId,
-          mobileNumber: req.data.mobileNumber,
-          password: req.data.password,
-          createdby: req.auth_token.userId //AdminId
+        const existingEmail = await prisma.user.findUnique({ where: { email: req.data.emailId } });
+        if (existingEmail) {
+          userDTO.data = [];
+          userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DUPLICATE_DATA);
+          userDTO.dataResponse.description = "A user with this email already exists";
+          return userDTO;
+        }
+        if (req.data.mobileNumber) {
+          const existingMobile = await prisma.user.findFirst({ where: { phone: req.data.mobileNumber } });
+          if (existingMobile) {
+            userDTO.data = [];
+            userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DUPLICATE_DATA);
+            userDTO.dataResponse.description = "A user with this mobile number already exists";
+            return userDTO;
+          }
+        }
+
+        const roleRec = req.data.roleId
+          ? await prisma.role.findUnique({ where: { id: String(req.data.roleId) } })
+          : null;
+
+        await prisma.user.create({
+          data: {
+            email: req.data.emailId,
+            name: req.data.fullName,
+            phone: req.data.mobileNumber || "",
+            password: req.data.password,
+            roleId: roleRec?.id || null,
+            createdBy: adminId,
+          },
         });
 
-        // Create a new user details
-        const newUserDetails = await UserDetails.create({
-          userName: req.data.userName,
-          displayName: req.data.displayName,
-          emailId: req.data.emailId,
-          mobileNumber: req.data.mobileNumber,
-          password: req.data.password,
-          createdby: req.auth_token.userId //AdminId
-        });
+        userDTO.data = "User created successfully";
+      } else {
+        const existingUser = await prisma.user.findUnique({ where: { id: String(id) } });
 
-        userDTO.data = { newUser, newUserDetails };
-      } else if (id > 0) {
-
-        const existingUser = await UserMaster.findOne({ where: { id: id, isdeleted: 0 } });
-        const existingUserDetails = await UserDetails.findOne({ where: { userId: id, isdeleted: 0 } });
-
-        if (!existingUser || !existingUserDetails) {
+        if (!existingUser) {
           userDTO.data = [];
           userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
-          // Return error if user is not found
           return userDTO;
         }
 
-        const updateExistingUser = await existingUser.update({
-          userName: req.data.userName,
-          displayName: req.data.displayName,
-          emailId: req.data.emailId,
-          mobileNumber: req.data.mobileNumber,
-          password: req.data.password,
-          updatedby: req.auth_token.userId, //AdminId
-          updatedon: new Date()
-        })
+        const dupEmail = await prisma.user.findFirst({
+          where: { email: req.data.emailId, id: { not: String(id) } },
+        });
+        if (dupEmail) {
+          userDTO.data = [];
+          userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DUPLICATE_DATA);
+          userDTO.dataResponse.description = "A user with this email already exists";
+          return userDTO;
+        }
+        if (req.data.mobileNumber) {
+          const dupMobile = await prisma.user.findFirst({
+            where: { phone: req.data.mobileNumber, id: { not: String(id) } },
+          });
+          if (dupMobile) {
+            userDTO.data = [];
+            userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DUPLICATE_DATA);
+            userDTO.dataResponse.description = "A user with this mobile number already exists";
+            return userDTO;
+          }
+        }
 
+        const roleRec = req.data.roleId
+          ? await prisma.role.findUnique({ where: { id: String(req.data.roleId) } })
+          : null;
 
-        const updateExistingUserDetails = await existingUserDetails.update({
-          userName: req.data.userName,
-          displayName: req.data.displayName,
-          emailId: req.data.emailId,
-          mobileNumber: req.data.mobileNumber,
-          password: req.data.password,
-          updatedby: req.auth_token.userId, //AdminId
-          updatedon: new Date()
-        })
+        const updateData: any = {
+          name: req.data.fullName,
+          email: req.data.emailId,
+          phone: req.data.mobileNumber || "",
+          roleId: roleRec?.id || null,
+          updatedBy: adminId,
+          ...(req.data.password ? { password: req.data.password } : {}),
+        };
 
+        await prisma.user.update({ where: { id: String(id) }, data: updateData });
 
-        userDTO.data = { updateExistingUser, updateExistingUserDetails }
-
+        userDTO.data = "User updated successfully";
       }
       return userDTO;
     } catch (error: any) {
@@ -144,202 +164,119 @@ class UserManagement {
     }
   }
 
-
-  /*************  ✨ Codeium Command 🌟  *************/
-  /**
-   * @description Get user details by id
-   * @param {RequestModel} req - Request data
-   * @returns {Promise<UserMasterModelDTO>} - UserMasterModelDTO containing user details
-   */
   public async getSpecificUserData(req: RequestModel): Promise<UserMasterModelDTO> {
     const userDTO: UserMasterModelDTO = new UserMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
 
-    // If no id is present then take userId from token
-    const id = req.data.id ? req.data.id : req.auth_token.userId;
+    const id = req.data.id ? String(req.data.id) : String(req.auth_token.userId);
 
     try {
+      const user = await prisma.user.findUnique({
+        where: { id },
+        include: { roleRef: { select: { id: true, name: true, displayName: true } } },
+      });
 
-      // Get details of a particular user and his roles
-      //Get details of a paritcular user and his roles
-      const specificUser: UserMaster | null = await UserMaster.findByPk(
-        id,
-        {
-          include: [
-            {
-              model: RoleMaster,
-              as: "roles",
-              through: {
-                attributes: [],
-              },
-            },
-            {
-              model: UserDetails,
-              as: "userdetails",
-            }
-          ],
-          order: [[{ model: RoleMaster, as: "roles" }, "id", "ASC"]],
-        }
-      );
-
-      if (!specificUser) {
-        // Return error if user is not found
+      if (!user) {
         userDTO.data = [];
         userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
         return userDTO;
       }
 
-      // Return user details with roles
-      userDTO.data = specificUser.dataValues;
+      const { password, roleRef, ...userData } = user as any;
+      userDTO.data = { ...userData, roleName: roleRef?.name || "USER", roleId: user.roleId };
       userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS);
 
       return userDTO;
     } catch (error: any) {
       logger.info(error.message);
-      // Return error if database error occurs
       userDTO.data = [];
       userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DB_ERROR);
       return userDTO;
     }
   }
 
-
-  /**
-   * @description Retrieves the roles of a user by user ID.
-   * @param {number} id - The ID of the user whose roles are to be retrieved.
-   * @returns {Promise<UserMasterModelDTO>} - A promise resolving to a UserMasterModelDTO containing user roles data.
-   */
   public async getUserRoles(id: number): Promise<UserMasterModelDTO> {
-    // Initialize UserMasterModelDTO with a success response
     const userDTO: UserMasterModelDTO = new UserMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
 
-
     try {
-      // Fetch user roles by user ID with associated roles
-
-      const userRoles = await UserMaster.findByPk(id, {
-        include: [
-          {
-            model: RoleMaster,
-            as: "roles",
-            through: {
-              attributes: [], // Exclude attributes from the join table
-            },
-          },
-        ],
-        order: [[{ model: RoleMaster, as: "roles" }, "id", "ASC"]], // Order roles by ID in ascending order
+      const user = await prisma.user.findUnique({
+        where: { id: String(id) },
+        include: {
+          roleRef: { select: { id: true, name: true, displayName: true } },
+        },
       });
 
-      if (!userRoles) {
+      if (!user) {
         userDTO.data = [];
-        // Return not found response if user roles are not found
         userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
         return userDTO;
       }
 
-      userDTO.data = userRoles;
-      // Set user roles data in response
+      userDTO.data = user;
       return userDTO;
     } catch (error: any) {
       logger.info(error.message);
-      // Log the error and set error response in case of a database error
       userDTO.data = [];
       userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DB_ERROR);
-      return userDTO
+      return userDTO;
     }
   }
 
-
-  /**
-   * @description Edits user details based on the provided request data.
-   * @param {RequestModel} req - Request data containing user details to be updated.
-   * @returns {Promise<UserMasterModelDTO>} - UserMasterModelDTO containing the result of the update operation.
-   */
   public async editUserDetails(req: RequestModel): Promise<UserMasterModelDTO> {
     const userDTO: UserMasterModelDTO = new UserMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
 
     try {
-      // Find existing user and user details records
-      const existingUser = await UserMaster.findOne({ where: { isdeleted: 0, id: req.data.id } });
-      const existingUserDetails = await UserDetails.findOne({ where: { isdeleted: 0, userId: req.data.id } });
+      const existingUser = await prisma.user.findUnique({ where: { id: String(req.data.id) } });
 
-
-      if (!existingUser || !existingUserDetails) {
+      if (!existingUser) {
         userDTO.data = [];
         userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
         return userDTO;
       }
 
-      // Update existing user information
-      const updateExistingUser = await existingUser.update({
-        userName: req.data.userName,
-        displayName: req.data.displayName,
-        emailId: req.data.emailId,
-        mobileNumber: req.data.mobileNumber,
-        updatedon: new Date(),
-        updatedby: req.auth_token.userId, //AdminId who is updating the user  
+      const updated = await prisma.user.update({
+        where: { id: String(req.data.id) },
+        data: {
+          name: req.data.fullName,
+          email: req.data.emailId,
+          phone: req.data.mobileNumber || "",
+          updatedBy: String(req.auth_token.userId),
+        },
       });
 
-
-      const updateExistingUserDetails = await existingUserDetails.update({
-        // Update existing user details information
-        userName: req.data.userName,
-        displayName: req.data.displayName,
-        emailId: req.data.emailId,
-        mobileNumber: req.data.mobileNumber,
-        updatedon: new Date(),
-        updatedby: req.auth_token.userId, //AdminId who is updating the user  
-      });
-
-      userDTO.data = { updateExistingUser, updateExistingUserDetails }
+      userDTO.data = updated;
       return userDTO;
     } catch (error: any) {
       logger.info(error.message);
-      // Log the error and return a database error response
       userDTO.data = [];
       userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DB_ERROR);
       return userDTO;
     }
-
   }
 
-  /**
-   * @description Deletes a user based on the provided request data.
-   * @param {RequestModel} req - Request data containing user details to be deleted.
-   * @returns {Promise<UserMasterModelDTO>} - UserMasterModelDTO containing the result of the deletion operation.
-   */
   public async deleteUser(req: RequestModel): Promise<UserMasterModelDTO> {
     const userDTO: UserMasterModelDTO = new UserMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
-    )
+    );
 
     try {
+      const existingUser = await prisma.user.findUnique({ where: { id: String(req.data.id) } });
 
-      const existingUser = await UserMaster.findOne({ where: { isdeleted: 0, id: req.data.id } })
-      const existingUserDetails = await UserDetails.findOne({ where: { isdeleted: 0, userId: req.data.id } })
-
-      if (!existingUser || !existingUserDetails) {
+      if (!existingUser) {
         userDTO.data = [];
         userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
         return userDTO;
       }
 
-      await existingUser.update({
-        isdeleted: 1,
-        deletedon: new Date(),
-        deletedby: req.auth_token.userId, //AdminId who is deleting the user
-      })
-
-      await existingUserDetails.update({
-        isdeleted: 1,
-        deletedon: new Date(),
-        deletedby: req.auth_token.userId, //AdminId who is deleting the user
-      })
+      await prisma.user.update({
+        where: { id: String(req.data.id) },
+        data: { deletedAt: new Date(), updatedBy: String(req.auth_token.userId) },
+      });
 
       userDTO.data = "User Is Deleted Successfully";
       return userDTO;
@@ -351,50 +288,33 @@ class UserManagement {
     }
   }
 
-
-  /**
-   * @description Sign in a user
-   * @param {RequestModel} req - Request data containing emailId and password
-   * @returns {Promise<UserMasterModelDTO>} - UserMasterModelDTO containing a newly created token
-   */
   public async signIn(req: RequestModel): Promise<UserMasterModelDTO> {
     const userDTO: UserMasterModelDTO = new UserMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
 
     try {
-
-      // Find a user by emailId and password
-      const specificUser: UserMaster | null = await UserMaster.findOne({
-        where: {
-          emailId: req.data.emailId,
-          password: req.data.password,
-          isdeleted: 0,
-        },
+      const user = await prisma.user.findFirst({
+        where: { email: req.data.emailId, password: req.data.password, deletedAt: null },
+        include: { roleRef: { select: { name: true } } },
       });
 
-      if (!specificUser) {
+      if (!user) {
         userDTO.data = [];
         userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
         return userDTO;
       }
 
-      // Create a partial user object to be used to generate a token
-      // It contains the user's id, userName, orgId and isMaster flag
-      const verifiedUser: Partial<UserMaster> = {
-        id: specificUser.id,
-        userName: specificUser.userName,
-        orgId: specificUser.orgId,
-        isMaster: specificUser.isMaster,
+      const verifiedUser = {
+        id: user.id,
+        email: user.email,
+        name: user.name,
+        role: user.roleRef?.name || "USER",
+        roleId: user.roleId,
       };
 
-      // Generate a token using the JWT_SECRET_KEY and the partial user object
-      // The token is valid for 5 hours
-      const token = jwt.sign({ ...verifiedUser }, process.env.JWT_SECRET_KEY, {
-        expiresIn: "5h",
-      });
+      const token = jwt.sign(verifiedUser, process.env.JWT_SECRET_KEY, { expiresIn: "5h" });
 
-      // Return the token as the response
       userDTO.data = token;
       return userDTO;
     } catch (error: any) {
@@ -405,37 +325,21 @@ class UserManagement {
     }
   }
 
-
-  /**
-   * @description Sign up a new user
-   * @param {RequestModel} req - Request data
-   * @returns {Promise<UserMasterModelDTO>} - UserMasterModelDTO containing a newly created user
-   */
   public async signUp(req: RequestModel): Promise<UserMasterModelDTO> {
     const userDTO: UserMasterModelDTO = new UserMasterModelDTO(
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
 
     try {
-
-      // Create a new user
-      const newUser: UserMaster | null = await UserMaster.create({
-        userName: req.data.userName,
-        displayName: req.data.displayName,
-        emailId: req.data.emailId,
-        mobileNumber: req.data.mobileNo,
-        password: req.data.password,
+      const newUser = await prisma.user.create({
+        data: {
+          name: req.data.fullName,
+          email: req.data.emailId,
+          phone: req.data.mobileNo || "",
+          password: req.data.password,
+        },
       });
 
-      const newUserDetails = await UserDetails.create({
-        userId: newUser.id,
-        userName: req.data.userName,
-        displayName: req.data.displayName,
-        emailId: req.data.emailId,
-        mobileNumber: req.data.mobileNo
-      })
-
-      // Send a welcome email to the user
       const emailPurpose: TEmailOptions = {
         receiverEmail: req.data.emailId,
         password: req.data.password,
@@ -444,10 +348,9 @@ class UserManagement {
 
       CommonUtils.initializeEmail(emailPurpose);
 
-      userDTO.data = { newUser, newUserDetails };
+      userDTO.data = newUser;
       return userDTO;
     } catch (error: any) {
-      // Log the error and return an error response
       logger.info(error.message);
       userDTO.data = [];
       userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DB_ERROR);
@@ -455,6 +358,5 @@ class UserManagement {
     }
   }
 }
-
 
 export default new UserManagement();

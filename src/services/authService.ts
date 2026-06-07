@@ -1,5 +1,4 @@
 import prisma from "../database/prismaClient";
-import { UserRole } from "@prisma/client";
 import { z } from "zod";
 import * as jwt from "jsonwebtoken";
 import crypto from "crypto";
@@ -17,7 +16,6 @@ export const RegisterSchema = z.object({
   password: z.string().min(6),
   phone: z.string().max(20).optional(),
   tenantId: z.string().optional(),
-  role: z.nativeEnum(UserRole).optional().default(UserRole.USER),
 });
 
 export const LoginSchema = z.object({
@@ -59,21 +57,19 @@ class AuthService {
         return dto;
       }
 
-      const hashedPassword = EncryptUtils.encrypt(data.password);
-
       const user = await prisma.user.create({
         data: {
           name: data.name,
           email: data.email,
-          password: hashedPassword,
+          password: data.password,
           phone: data.phone,
           tenantId: data.tenantId,
-          role: data.role || UserRole.USER,
         },
-        select: { id: true, name: true, email: true, role: true, tenantId: true, createdAt: true },
+        select: { id: true, name: true, email: true, tenantId: true, createdAt: true },
       });
 
       const session = await this.createSession(user.id);
+
       dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_CREATED);
       dto.data = { user, ...session };
       return dto;
@@ -114,7 +110,7 @@ class AuthService {
 
       if (
         data.tenantId && user.tenantId && user.tenantId !== data.tenantId &&
-        user.role !== UserRole.SUPER_ADMIN && user.role !== UserRole.ADMIN
+        !user.salon
       ) {
         dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_UNAUTHORIZED);
         dto.dataResponse.description = "Invalid tenant for this account";
@@ -122,13 +118,16 @@ class AuthService {
       }
 
       const session = await this.createSession(user.id);
+
+      const sessionRole = session.role || "USER";
       dto.data = {
         ...session,
         user: {
           id: user.id,
           name: user.name,
           email: user.email,
-          role: user.role,
+          role: sessionRole,
+          roleId: user.roleId,
           tenantId: user.tenantId || user.salon?.id || null,
           salon: user.salon,
           tenant: user.tenant || user.salon,
@@ -157,8 +156,8 @@ class AuthService {
           name: true,
           email: true,
           phone: true,
-          role: true,
           tenantId: true,
+          roleId: true,
           createdAt: true,
           salon: {
             select: {
@@ -172,8 +171,8 @@ class AuthService {
               subscriptionStatus: true, subscriptionExpiry: true, isActive: true,
             },
           },
-          userRoles: {
-            include: { role: { include: { permissions: { include: { permission: true } } } } },
+          roleRef: {
+            include: { permissions: { include: { permission: true } } },
           },
         },
       });
@@ -196,14 +195,17 @@ class AuthService {
   /**
    * Generate JWT token
    */
-  generateToken(user: { id: string; email: string; role: UserRole }) {
-    const payload: any = {
+  generateToken(user: {
+    id: string; email: string; role: string;
+    tenantId?: string | null; roles?: string[]; permissions?: string[];
+  }) {
+    const payload = {
       id: user.id,
       email: user.email,
       role: user.role,
-      tenantId: (user as any).tenantId || (user as any).salon?.id || null,
-      roles: (user as any).roles || [],
-      permissions: (user as any).permissions || [],
+      tenantId: user.tenantId || null,
+      roles: user.roles || [],
+      permissions: user.permissions || [],
     };
     return jwt.sign(payload, this.JWT_SECRET, {
       expiresIn: this.JWT_EXPIRES as any,
@@ -216,7 +218,7 @@ class AuthService {
    * Verify JWT token
    */
   verifyToken(token: string): {
-    id: string; email: string; role: UserRole;
+    id: string; email: string; role: string;
     tenantId?: string | null; roles?: string[]; permissions?: string[];
   } | null {
     try {
@@ -272,32 +274,38 @@ class AuthService {
     }
   }
 
+  private roleNameToEnum(roleName: string): string {
+    return roleName || "USER";
+  }
+
   private async createSession(userId: string) {
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: {
         salon: { select: { id: true } },
-        userRoles: {
-          include: { role: { include: { permissions: { include: { permission: true } } } } },
+        roleRef: {
+          include: { permissions: { include: { permission: true } } },
         },
       },
     });
 
     if (!user) throw new Error("User not found");
 
-    const roles = user.userRoles.map((m) => m.role.name);
-    const permissions = Array.from(
-      new Set(user.userRoles.flatMap((m) => m.role.permissions.map((p) => p.permission.key)))
-    );
+    const roleName = user.roleRef?.name || "USER";
+    const permissions = user.roleRef
+      ? Array.from(new Set(user.roleRef.permissions.map((p) => p.permission.key)))
+      : [];
+
+    const primaryRole = this.roleNameToEnum(roleName);
 
     const accessToken = this.generateToken({
       id: user.id,
       email: user.email,
-      role: user.role,
+      role: primaryRole,
       tenantId: user.tenantId || user.salon?.id || null,
-      roles,
+      roles: [roleName],
       permissions,
-    } as any);
+    });
 
     const refreshToken = crypto.randomBytes(48).toString("base64url");
     const expiresAt = new Date();
@@ -308,7 +316,7 @@ class AuthService {
       select: { id: true },
     });
 
-    return { accessToken, token: accessToken, refreshToken, refreshTokenId: stored.id };
+    return { accessToken, token: accessToken, refreshToken, refreshTokenId: stored.id, role: primaryRole };
   }
 
   private hashToken(token: string) {

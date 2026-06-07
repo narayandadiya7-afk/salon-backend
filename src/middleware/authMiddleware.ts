@@ -1,8 +1,9 @@
 const jwt = require("jsonwebtoken");
 import { TAuthorizationModel } from "../types/common";
 import { Request, Response, NextFunction } from "express";
+import prisma from "../database/prismaClient";
 
-const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
+const authMiddleware = async (req: Request, res: Response, next: NextFunction) => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
@@ -13,14 +14,26 @@ const authMiddleware = (req: Request, res: Response, next: NextFunction) => {
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET_KEY);
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET_KEY);
+
+    let roleId = decoded?.roleId;
+    if (!roleId) {
+      const roleName = decoded?.roles?.[0] || decoded?.role;
+      if (roleName) {
+        const role = await prisma.role.findFirst({
+          where: { name: roleName, deletedAt: null },
+          select: { id: true },
+        });
+        roleId = role?.id || undefined;
+      }
+    }
 
     const auth_token: TAuthorizationModel = {
       userId: decoded?.id,
-      roleId: decoded?.roleId,
-      emailId: decoded?.emailId,
+      roleId: roleId,
+      emailId: decoded?.emailId || decoded?.email,
       mobileNumber: decoded?.mobileNumber,
-      fullName: decoded?.fullName,
+      fullName: decoded?.fullName || decoded?.name,
     };
 
     req.body = { ...req.body, auth_token };

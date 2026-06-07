@@ -1,6 +1,3 @@
-// This is your Prisma schema file for the Salon SaaS Platform
-// Multi-tenant architecture with shared database and tenantId isolation
-
 generator client {
   provider   = "prisma-client-js"
   engineType = "library"
@@ -64,39 +61,169 @@ enum AuditAction {
 }
 
 // ─────────────────────────────────────────────
-// USER
+// REFERENCE DATA
 // ─────────────────────────────────────────────
 
-model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  password      String
-  name          String
-  phone         String?
-  role          UserRole @default(USER)
-  tenantId      String?
-  isVerified    Boolean  @default(false)
-  deletedAt     DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+model Country {
+  id          Int      @id @default(autoincrement())
+  name        String   @unique
+  countryCode String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  // Relations
-  salon         Salon?   @relation("OwnedSalon")
-  tenant        Salon?   @relation("TenantUsers", fields: [tenantId], references: [id], onDelete: Cascade)
-  appointments  Appointment[]
-  payments      Payment[]
-  userRoles     UserRoleMapping[]
-  refreshTokens RefreshToken[]
-  customerProfile CustomerProfile?
-  auditLogs     AuditLog[]
+  states      State[]
 
-  @@index([tenantId])
-  @@index([role])
-  @@map("users")
+  @@map("countries")
+}
+
+model State {
+  id          Int      @id @default(autoincrement())
+  name        String
+  countryId   Int
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  country     Country  @relation(fields: [countryId], references: [id])
+  districts   District[]
+
+  @@unique([countryId, name])
+  @@map("states")
+}
+
+model District {
+  id        Int      @id @default(autoincrement())
+  name      String
+  stateId   Int
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  state     State    @relation(fields: [stateId], references: [id])
+
+  @@unique([stateId, name])
+  @@map("districts")
 }
 
 // ─────────────────────────────────────────────
-// SALON (TENANT)
+// CONFIG
+// ─────────────────────────────────────────────
+
+model ConfigGroup {
+  id          Int      @id @default(autoincrement())
+  groupName   String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  params      ConfigParam[]
+
+  @@map("config_groups")
+}
+
+model ConfigParam {
+  id          Int         @id @default(autoincrement())
+  groupName   String
+  paramName   String
+  paramValue  String
+  description String?
+  isActive    Boolean     @default(true)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  group       ConfigGroup @relation(fields: [groupName], references: [groupName])
+
+  @@unique([groupName, paramName])
+  @@map("config_params")
+}
+
+// ─────────────────────────────────────────────
+// ROLE & PERMISSION
+// ─────────────────────────────────────────────
+
+model Role {
+  id          String   @id @default(cuid())
+  tenantId    String?
+  name        String
+  displayName String?
+  description String?
+  isSystem    Boolean  @default(false)
+  isActive    Boolean  @default(true)
+  deletedAt   DateTime?
+  createdBy   String?
+  updatedBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant      Salon?                @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  permissions RolePermission[]
+  users       User[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId])
+  @@index([isActive])
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  name        String
+  description String?
+  module      String?  // e.g. "admin", "app" — for scoping
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles        RolePermission[]
+  menuItems    MenuItem[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  permissionId String
+  createdAt    DateTime   @default(now())
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ─────────────────────────────────────────────
+// ADMIN MENU
+// ─────────────────────────────────────────────
+
+model MenuItem {
+  id             Int       @id @default(autoincrement())
+  parentId       Int?
+  name           String
+  displayName    String
+  url            String?
+  icon           String?
+  permissionKey  String?
+  displayOrder   Int       @default(0)
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  parent         MenuItem?  @relation("MenuHierarchy", fields: [parentId], references: [id])
+  children       MenuItem[] @relation("MenuHierarchy")
+  permission     Permission? @relation(fields: [permissionKey], references: [key])
+
+  @@index([parentId])
+  @@index([isActive])
+  @@map("menu_items")
+}
+
+// ─────────────────────────────────────────────
+// TENANT / SALON
 // ─────────────────────────────────────────────
 
 model Salon {
@@ -114,27 +241,23 @@ model Salon {
   email               String?
   logoUrl             String?
   bannerUrl           String?
-  
-  // Subscription
+
   planType            PlanType           @default(BASIC)
   subscriptionStatus  SubscriptionStatus @default(TRIAL)
   subscriptionExpiry  DateTime?
-  
-  // Working hours (JSON stored as string)
+
   workingHours        String?   @db.Text
   slotDurationMinutes Int                @default(30)
-  
-  // Theme customization
+
   primaryColor        String?            @default("#1890ff")
   settings            Json?
   featureFlags        Json?
-  
+
   isActive            Boolean            @default(true)
   deletedAt           DateTime?
   createdAt           DateTime           @default(now())
   updatedAt           DateTime           @updatedAt
 
-  // Relations
   owner               User               @relation("OwnedSalon", fields: [ownerId], references: [id])
   users               User[]             @relation("TenantUsers")
   roles               Role[]
@@ -155,65 +278,39 @@ model Salon {
   @@map("salons")
 }
 
-model Role {
-  id          String   @id @default(cuid())
-  tenantId    String?
-  name        String
-  description String?
-  isSystem    Boolean  @default(false)
-  deletedAt   DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+// ─────────────────────────────────────────────
+// USER
+// ─────────────────────────────────────────────
 
-  tenant      Salon?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
-  permissions RolePermission[]
-  users       UserRoleMapping[]
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  password      String
+  name          String
+  phone         String?
+  roleId        String?                  // FK to roles table
+  tenantId      String?
+  isActive      Boolean  @default(true)
+  isVerified    Boolean  @default(false)
+  createdBy     String?
+  updatedBy     String?
+  deletedAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  @@unique([tenantId, name])
+  salon         Salon?                @relation("OwnedSalon")
+  tenant        Salon?                @relation("TenantUsers", fields: [tenantId], references: [id], onDelete: Cascade)
+  roleRef       Role?                 @relation(fields: [roleId], references: [id])
+  appointments  Appointment[]
+  payments      Payment[]
+  refreshTokens RefreshToken[]
+  customerProfile CustomerProfile?
+  auditLogs     AuditLog[]
+
   @@index([tenantId])
-  @@map("roles")
-}
-
-model Permission {
-  id          String   @id @default(cuid())
-  key         String   @unique
-  name        String
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  roles       RolePermission[]
-
-  @@map("permissions")
-}
-
-model RolePermission {
-  id           String     @id @default(cuid())
-  roleId       String
-  permissionId String
-  createdAt    DateTime   @default(now())
-
-  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
-
-  @@unique([roleId, permissionId])
-  @@map("role_permissions")
-}
-
-model UserRoleMapping {
-  id        String   @id @default(cuid())
-  tenantId  String?
-  userId    String
-  roleId    String
-  createdAt DateTime @default(now())
-
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
-
-  @@unique([tenantId, userId, roleId])
-  @@index([tenantId])
-  @@index([userId])
-  @@map("user_roles")
+  @@index([roleId])
+  @@index([email])
+  @@map("users")
 }
 
 // ─────────────────────────────────────────────
@@ -227,7 +324,7 @@ model Service {
   name         String
   description  String?
   price        Float
-  duration     Int      // in minutes
+  duration     Int
   category     String?
   imageUrl     String?
   isActive     Boolean  @default(true)
@@ -235,7 +332,6 @@ model Service {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  // Relations
   salon        Salon         @relation(fields: [salonId], references: [id], onDelete: Cascade)
   appointments Appointment[]
 
@@ -245,21 +341,20 @@ model Service {
 }
 
 // ─────────────────────────────────────────────
-// TIME SLOT (Availability)
+// TIME SLOT
 // ─────────────────────────────────────────────
 
 model TimeSlot {
   id          String   @id @default(cuid())
   salonId     String
   tenantId    String
-  dayOfWeek   Int      // 0=Sunday, 1=Monday, ..., 6=Saturday
-  startTime   String   // "09:00"
-  endTime     String   // "18:00"
+  dayOfWeek   Int
+  startTime   String
+  endTime     String
   isAvailable Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  // Relations
   salon       Salon    @relation(fields: [salonId], references: [id], onDelete: Cascade)
 
   @@unique([salonId, dayOfWeek])
@@ -281,15 +376,15 @@ model Appointment {
   customerEmail  String
   customerPhone  String
   appointmentDate DateTime
-  startTime      String            // "10:00"
-  endTime        String            // "10:30"
+  startTime      String
+  endTime        String
   status         AppointmentStatus @default(BOOKED)
   notes          String?
+  createdBy      String?
   deletedAt      DateTime?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
-  // Relations
   salon          Salon             @relation(fields: [salonId], references: [id], onDelete: Cascade)
   service        Service           @relation(fields: [serviceId], references: [id])
   customer       User?             @relation(fields: [customerId], references: [id])
@@ -312,7 +407,7 @@ model Payment {
   razorpayOrderId   String?       @unique
   razorpayPaymentId String?       @unique
   razorpaySignature String?
-  amount            Float         // in INR
+  amount            Float
   currency          String        @default("INR")
   planType          PlanType
   status            PaymentStatus @default(PENDING)
@@ -320,7 +415,6 @@ model Payment {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
 
-  // Relations
   user              User          @relation(fields: [userId], references: [id])
   salon             Salon?        @relation(fields: [salonId], references: [id])
 
@@ -351,15 +445,15 @@ model Staff {
 }
 
 model Plan {
-  id          String   @id @default(cuid())
-  code        String   @unique
-  name        String
-  description String?
+  id           String   @id @default(cuid())
+  code         String   @unique
+  name         String
+  description  String?
   priceMonthly Float
   priceYearly  Float?
   trialDays    Int     @default(14)
   features     Json?
-  isActive     Boolean @default(true)
+  isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

@@ -34,6 +34,7 @@ export type TMenuHierarchy = {
   name: string;
   dispName: string;
   parentId: number;
+  menuUniqueId: string;
   entityUrl: string;
   description: string;
   isActive: number;
@@ -45,7 +46,7 @@ export type TMenuHierarchy = {
 };
 
 export type TPrivilege = {
-  id?: number;
+  id?: string;
   name: string;
   groupId: string;
   menuId: number;  
