@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const fs = require("fs");
 import sendMail from "./sendEmail";
 import EncryptUtils from "./encrypt";
@@ -47,6 +48,23 @@ class CommonUtils {
    * The email purpose can be one of the following:
    * - SignIn: The email content is set to the SignIn template.
    */
+  static generateUniqueId(text: string): string {
+    const randomStr = crypto.randomBytes(3).toString("hex");
+    const randomNumber = crypto.randomInt(10, 100);
+    const baseText = String(text || "id");
+    const cleanText = baseText.replace(/[^a-zA-Z0-9]/g, " ");
+    const camelText = cleanText
+      .trim()
+      .split(/\s+/)
+      .map((word: string, index: number) =>
+        index === 0
+          ? word.toLowerCase()
+          : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      )
+      .join("");
+    return `${camelText}${randomStr}${randomNumber}`;
+  }
+
   static initializeEmail(emailOptions: TEmailOptions) {
     switch (emailOptions.emailPurpose) {
       case "SignIn":

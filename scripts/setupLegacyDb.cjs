@@ -177,7 +177,7 @@ async function setup() {
         ('roles', 'Roles', 0, 'roles', '', 1, 1, 'safety', 4, 1),
         ('configuration', 'Configuration', 0, '', '', 1, 1, 'settings', 5, 1),
         ('config-group', 'Config Groups', 0, 'config-group', '', 1, 1, 'group', 6, 1),
-        ('config-param', 'Config Parameters', 0, 'config-param', '', 1, 1, 'list', 7, 1)
+        ('config-param', 'Config Param', 0, 'config-param', '', 1, 1, 'list', 7, 1)
     `);
 
     await sequelize.query(`UPDATE "userManagement"."menuhierarchy" SET menu_unique_id = CONCAT('menu-', id)`);

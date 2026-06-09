@@ -111,29 +111,36 @@ model District {
 // ─────────────────────────────────────────────
 
 model ConfigGroup {
-  id          Int      @id @default(autoincrement())
-  groupName   String   @unique
-  description String?
-  isActive    Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id            Int      @id @default(autoincrement())
+  groupName     String   @unique
+  groupUniqueId String?  @unique
+  description   String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  params      ConfigParam[]
+  params        ConfigParam[]
+  paramRefs     ConfigParam[] @relation("ParamGroupRef")
 
   @@map("config_groups")
 }
 
 model ConfigParam {
-  id          Int         @id @default(autoincrement())
-  groupName   String
-  paramName   String
-  paramValue  String
-  description String?
-  isActive    Boolean     @default(true)
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
+  id            Int         @id @default(autoincrement())
+  groupName     String
+  groupId       Int?
+  paramName     String
+  paramValue    String      @default("")
+  paramUniqueId String?     @unique
+  controlId     Int         @default(1)
+  refGroupId    Int         @default(0)
+  description   String?
+  isActive      Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
-  group       ConfigGroup @relation(fields: [groupName], references: [groupName])
+  group         ConfigGroup  @relation(fields: [groupName], references: [groupName])
+  groupRef      ConfigGroup? @relation("ParamGroupRef", fields: [groupId], references: [id])
 
   @@unique([groupName, paramName])
   @@map("config_params")
@@ -284,7 +291,7 @@ model Salon {
 
 model User {
   id            String   @id @default(cuid())
-  email         String   @unique
+  email         String
   password      String
   name          String
   phone         String?

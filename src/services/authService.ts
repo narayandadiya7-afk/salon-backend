@@ -42,7 +42,7 @@ class AuthService {
       if (data.phone) whereClauses.push({ phone: data.phone });
 
       const duplicates = await prisma.user.findMany({
-        where: { OR: whereClauses },
+        where: { OR: whereClauses, deletedAt: null },
         select: { email: true, phone: true },
       });
 
@@ -88,7 +88,7 @@ class AuthService {
   async login(data: z.infer<typeof LoginSchema>) {
     const dto = new BaseResponse(CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS));
     try {
-      const user = await prisma.user.findUnique({
+      const user = await prisma.user.findFirst({
         where: { email: data.email },
         include: {
           salon: { select: { id: true, slug: true, name: true, subscriptionStatus: true, subscriptionExpiry: true } },

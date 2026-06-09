@@ -13,11 +13,11 @@ class ConfigManagement {
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
     const filterModel: CommonRequestModel = { ...req.data };
-    const offset = (filterModel.currentPage - 1) * filterModel.pageSize;
-    const limit = filterModel.pageSize;
 
     try {
-      filterModel.totalRows = await prisma.configGroup.count();
+      const isPagination = filterModel.currentPage !== -1 && filterModel.pageSize > 0;
+      const offset = isPagination ? (filterModel.currentPage - 1) * filterModel.pageSize : undefined;
+      const limit = isPagination ? filterModel.pageSize : undefined;
 
       const where: any = {};
       if (filterModel.searchText) {
@@ -27,15 +27,27 @@ class ConfigManagement {
         ];
       }
 
-      const groups = await prisma.configGroup.findMany({
-        where,
-        skip: offset,
-        take: limit,
-        orderBy: { id: "desc" },
-      });
+      const [groups, totalRows] = await Promise.all([
+        prisma.configGroup.findMany({
+          where,
+          skip: offset,
+          take: limit,
+          orderBy: { id: "desc" },
+        }),
+        prisma.configGroup.count({ where }),
+      ]);
 
+      filterModel.totalRows = totalRows;
       filterModel.filterRowsCount = groups.length;
-      dto.data = groups;
+      dto.data = groups.map((g) => ({
+        id: g.id,
+        name: g.groupName,
+        groupUniqueId: g.groupUniqueId,
+        description: g.description,
+        isActive: g.isActive,
+        createdAt: g.createdAt,
+        updatedAt: g.updatedAt,
+      }));
       dto.filterModel = filterModel;
       return dto;
     } catch (error: any) {
@@ -58,7 +70,15 @@ class ConfigManagement {
         dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
         return dto;
       }
-      dto.data = record;
+      dto.data = {
+        id: record.id,
+        name: record.groupName,
+        groupUniqueId: record.groupUniqueId,
+        description: record.description,
+        isActive: record.isActive,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      };
       return dto;
     } catch (error: any) {
       logger.info(error.message);
@@ -98,15 +118,23 @@ class ConfigManagement {
     );
 
     try {
-      if (!req.data.id) {
+      const { id, name, groupUniqueId, description } = req.data;
+
+      if (!id) {
+        let newGroupUniqueId = groupUniqueId || null;
+        if (!newGroupUniqueId) {
+          newGroupUniqueId = CommonUtils.generateUniqueId(name);
+        }
+
         await prisma.configGroup.create({
           data: {
-            groupName: req.data.name,
-            description: req.data.description || "",
+            groupName: name,
+            description: description || "",
+            groupUniqueId: newGroupUniqueId,
           },
         });
       } else {
-        const record = await prisma.configGroup.findUnique({ where: { id: Number(req.data.id) } });
+        const record = await prisma.configGroup.findUnique({ where: { id: Number(id) } });
         if (!record) {
           dto.data = [];
           dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
@@ -114,10 +142,10 @@ class ConfigManagement {
         }
 
         await prisma.configGroup.update({
-          where: { id: Number(req.data.id) },
+          where: { id: Number(id) },
           data: {
-            groupName: req.data.name,
-            description: req.data.description || "",
+            groupName: name,
+            description: description || "",
           },
         });
       }
@@ -137,13 +165,21 @@ class ConfigManagement {
       CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS)
     );
     const filterModel: CommonRequestModel = { ...req.data };
-    const offset = (filterModel.currentPage - 1) * filterModel.pageSize;
-    const limit = filterModel.pageSize;
 
     try {
-      filterModel.totalRows = await prisma.configParam.count();
+      const isPagination = filterModel.currentPage !== -1 && filterModel.pageSize > 0;
+      const offset = isPagination ? (filterModel.currentPage - 1) * filterModel.pageSize : undefined;
+      const limit = isPagination ? filterModel.pageSize : undefined;
 
       const where: any = {};
+      const groupWhere: any = {};
+
+      if (req?.data?.groupId) {
+        where.groupId = Number(req.data.groupId);
+      }
+      if (req?.data?.groupUniqueId) {
+        groupWhere.groupUniqueId = req.data.groupUniqueId;
+      }
       if (filterModel.searchText) {
         where.OR = [
           { paramName: { contains: filterModel.searchText, mode: 'insensitive' } },
@@ -151,15 +187,40 @@ class ConfigManagement {
         ];
       }
 
-      const params = await prisma.configParam.findMany({
-        where,
-        skip: offset,
-        take: limit,
-        orderBy: { id: "desc" },
-      });
+      const [params, totalRows] = await Promise.all([
+        prisma.configParam.findMany({
+          where: { ...where, group: groupWhere.groupUniqueId ? { groupUniqueId: groupWhere.groupUniqueId } : undefined },
+          skip: offset,
+          take: limit,
+          orderBy: { id: "desc" },
+          include: {
+            group: {
+              select: { groupName: true, groupUniqueId: true },
+            },
+          },
+        }),
+        prisma.configParam.count({ where }),
+      ]);
 
+      const rows = params.map((p) => ({
+        id: p.id,
+        name: p.paramName,
+        description: p.description,
+        groupId: p.groupId,
+        groupName: p.group.groupName,
+        groupUniqueId: p.group.groupUniqueId,
+        paramUniqueId: p.paramUniqueId,
+        paramValue: p.paramValue,
+        controlId: p.controlId,
+        refGroupId: p.refGroupId,
+        isActive: p.isActive,
+        createdAt: p.createdAt,
+        updatedAt: p.updatedAt,
+      }));
+
+      filterModel.totalRows = totalRows;
       filterModel.filterRowsCount = params.length;
-      dto.data = { rows: params };
+      dto.data = { rows };
       dto.filterModel = filterModel;
       return dto;
     } catch (error: any) {
@@ -176,13 +237,34 @@ class ConfigManagement {
     );
 
     try {
-      const record = await prisma.configParam.findUnique({ where: { id: Number(req.data.id) } });
+      const record = await prisma.configParam.findUnique({
+        where: { id: Number(req.data.id) },
+        include: {
+          group: {
+            select: { groupName: true, groupUniqueId: true },
+          },
+        },
+      });
       if (!record) {
         dto.data = [];
         dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
         return dto;
       }
-      dto.data = record;
+      dto.data = {
+        id: record.id,
+        name: record.paramName,
+        description: record.description,
+        groupId: record.groupId,
+        groupName: record.group.groupName,
+        groupUniqueId: record.group.groupUniqueId,
+        paramUniqueId: record.paramUniqueId,
+        paramValue: record.paramValue,
+        controlId: record.controlId,
+        refGroupId: record.refGroupId,
+        isActive: record.isActive,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      };
       return dto;
     } catch (error: any) {
       logger.info(error.message);
@@ -198,29 +280,58 @@ class ConfigManagement {
     );
 
     try {
-      if (!req.data.id) {
+      const { id, name, description, groupId, paramUniqueId } = req.data;
+
+      if (!id) {
+        const group = await prisma.configGroup.findUnique({ where: { id: Number(groupId) } });
+        if (!group) {
+          dto.data = [];
+          dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
+          return dto;
+        }
+
+        let newParamUniqueId = paramUniqueId || null;
+        if (!newParamUniqueId) {
+          newParamUniqueId = CommonUtils.generateUniqueId(name);
+        }
+
         await prisma.configParam.create({
           data: {
-            groupName: req.data.groupName || "",
-            paramName: req.data.name,
+            groupName: group.groupName,
+            groupId: group.id,
+            paramName: name,
             paramValue: req.data.paramValue || "",
-            description: req.data.description || "",
+            paramUniqueId: newParamUniqueId,
+            description: description || "",
           },
         });
       } else {
-        const record = await prisma.configParam.findUnique({ where: { id: Number(req.data.id) } });
+        const record = await prisma.configParam.findUnique({ where: { id: Number(id) } });
         if (!record) {
           dto.data = [];
           dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_NOT_FOUND);
           return dto;
         }
 
+        let targetGroupName = record.groupName;
+        let targetGroupId = record.groupId;
+        if (groupId) {
+          const group = await prisma.configGroup.findUnique({ where: { id: Number(groupId) } });
+          if (group) {
+            targetGroupName = group.groupName;
+            targetGroupId = group.id;
+          }
+        }
+
         await prisma.configParam.update({
-          where: { id: Number(req.data.id) },
+          where: { id: Number(id) },
           data: {
-            paramName: req.data.name,
+            groupName: targetGroupName,
+            groupId: targetGroupId,
+            paramName: name,
             paramValue: req.data.paramValue || record.paramValue,
-            description: req.data.description || record.description,
+            paramUniqueId: paramUniqueId || record.paramUniqueId,
+            description: description || record.description,
           },
         });
       }
@@ -266,7 +377,14 @@ class ConfigManagement {
 
     try {
       const data = { ...req.data };
-      await prisma.configParam.create({ data: { groupName: "", paramName: data.name || "", paramValue: data.paramValue || "", description: data.description || "" } });
+      await prisma.configParam.create({
+        data: {
+          groupName: "",
+          paramName: data.name || "",
+          paramValue: data.paramValue || "",
+          description: data.description || "",
+        },
+      });
       return dto;
     } catch (error: any) {
       logger.info(error.message);
@@ -370,7 +488,7 @@ class ConfigManagement {
       }
 
       const getEntityFromKey = (key: string): string | null => {
-        const match = key.match(/^admin\.\w+_(.+)$/);
+        const match = key.match(/^(?:VIEW|ADDEDIT|DELETE)(.+)$/);
         return match ? match[1] : null;
       };
 
@@ -385,7 +503,7 @@ class ConfigManagement {
                   return pEntity === entity;
                 })
                 .map((p) => ({
-                  id: p.id,
+                  id: String(p.id),
                   name: p.name,
                   menuId: menu.id,
                   groupId: "",

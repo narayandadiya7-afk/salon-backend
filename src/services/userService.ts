@@ -68,14 +68,14 @@ class UserManagement {
 
     try {
       if (req.auth_token.emailId) {
-        const admin = await prisma.user.findUnique({ where: { email: req.auth_token.emailId } });
+        const admin = await prisma.user.findFirst({ where: { email: req.auth_token.emailId } });
         if (admin) adminId = admin.id;
       }
     } catch {}
 
     try {
       if (!id) {
-        const existingEmail = await prisma.user.findUnique({ where: { email: req.data.emailId } });
+        const existingEmail = await prisma.user.findFirst({ where: { email: req.data.emailId, deletedAt: null } });
         if (existingEmail) {
           userDTO.data = [];
           userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DUPLICATE_DATA);
@@ -83,7 +83,7 @@ class UserManagement {
           return userDTO;
         }
         if (req.data.mobileNumber) {
-          const existingMobile = await prisma.user.findFirst({ where: { phone: req.data.mobileNumber } });
+          const existingMobile = await prisma.user.findFirst({ where: { phone: req.data.mobileNumber, deletedAt: null } });
           if (existingMobile) {
             userDTO.data = [];
             userDTO.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DUPLICATE_DATA);
@@ -118,7 +118,7 @@ class UserManagement {
         }
 
         const dupEmail = await prisma.user.findFirst({
-          where: { email: req.data.emailId, id: { not: String(id) } },
+          where: { email: req.data.emailId, id: { not: String(id) }, deletedAt: null },
         });
         if (dupEmail) {
           userDTO.data = [];
@@ -128,7 +128,7 @@ class UserManagement {
         }
         if (req.data.mobileNumber) {
           const dupMobile = await prisma.user.findFirst({
-            where: { phone: req.data.mobileNumber, id: { not: String(id) } },
+            where: { phone: req.data.mobileNumber, id: { not: String(id) }, deletedAt: null },
           });
           if (dupMobile) {
             userDTO.data = [];
