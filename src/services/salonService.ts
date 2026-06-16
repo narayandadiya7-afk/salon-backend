@@ -281,6 +281,73 @@ class SalonService {
     }
   }
 
+  /**
+   * Create a salon with a 1-month free trial (used during registration)
+   */
+  async createSalonForTrial(ownerId: string, name: string, preferredSlug?: string) {
+    const dto = new BaseResponse(CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS));
+    try {
+      const slug = preferredSlug || (await this.generateUniqueSlug(name));
+
+      const existing = await prisma.salon.findUnique({ where: { slug } });
+      if (existing) {
+        dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DUPLICATE_DATA);
+        dto.dataResponse.description = "Slug already taken. Please choose another.";
+        return dto;
+      }
+
+      const expiry = new Date();
+      expiry.setDate(expiry.getDate() + 30);
+
+      const salon = await prisma.salon.create({
+        data: {
+          ownerId,
+          name,
+          slug,
+          subdomain: slug,
+          subscriptionStatus: SubscriptionStatus.TRIAL,
+          subscriptionExpiry: expiry,
+        },
+      });
+
+      await prisma.user.update({ where: { id: ownerId }, data: { tenantId: salon.id } });
+      await this.initializeDefaultRoles(salon.id, ownerId);
+      await this.createDefaultWorkingHours(salon.id);
+
+      dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_CREATED);
+      dto.data = salon;
+      return dto;
+    } catch (error: any) {
+      logger.error("createSalonForTrial error:", error.message);
+      dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DB_ERROR);
+      dto.dataResponse.description = "Failed to create salon";
+      return dto;
+    }
+  }
+
+  /**
+   * Generate a unique URL-friendly slug from a salon name
+   */
+  async generateUniqueSlug(name: string): Promise<string> {
+    let slug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 50);
+
+    if (!slug) slug = "salon";
+
+    // Ensure uniqueness
+    const existing = await prisma.salon.findUnique({ where: { slug } });
+    if (existing) {
+      let i = 1;
+      while (await prisma.salon.findUnique({ where: { slug: `${slug}-${i}` } })) i++;
+      slug = `${slug}-${i}`;
+    }
+
+    return slug;
+  }
+
   // ─── Private Helpers ────────────────────────────────────────────────────────
 
   private calculateExpiry(planType: PlanType, currentExpiry?: Date | null): Date {

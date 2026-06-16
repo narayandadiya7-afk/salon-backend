@@ -7,6 +7,7 @@ import logger from "../logger";
 import CommonUtils from "../utils/common";
 import BaseResponse from "../modules/common/models/baseResponse";
 import { eReturnCodes } from "../enums/commonEnums";
+import salonService from "./salonService";
 
 // ─── Validation Schemas ───────────────────────────────────────────────────────
 
@@ -16,6 +17,8 @@ export const RegisterSchema = z.object({
   password: z.string().min(6),
   phone: z.string().max(20).optional(),
   tenantId: z.string().optional(),
+  role: z.string().optional(),
+  salonName: z.string().min(2).max(100).optional(),
 });
 
 export const LoginSchema = z.object({
@@ -68,10 +71,38 @@ class AuthService {
         select: { id: true, name: true, email: true, tenantId: true, createdAt: true },
       });
 
+      // If a role is requested (e.g. SALON_OWNER), assign a matching system role
+      if (data.role) {
+        let role = await prisma.role.findFirst({
+          where: { name: data.role, isActive: true },
+          orderBy: { tenantId: { sort: "asc", nulls: "first" } },
+        });
+
+        if (!role) {
+          role = await prisma.role.create({
+            data: { name: data.role, isSystem: true },
+          });
+        }
+
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { roleId: role.id },
+        });
+      }
+
+      // Auto-create salon with 1-month free trial for SALON_OWNER
+      let salonData = null;
+      if (data.role === "SALON_OWNER" && data.salonName) {
+        const result = await salonService.createSalonForTrial(user.id, data.salonName);
+        if (result.dataResponse.returnCode === eReturnCodes.R_CREATED || result.dataResponse.returnCode === eReturnCodes.R_SUCCESS) {
+          salonData = result.data;
+        }
+      }
+
       const session = await this.createSession(user.id);
 
       dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_CREATED);
-      dto.data = { user, ...session };
+      dto.data = { user, ...session, salon: salonData };
       return dto;
     } catch (error: any) {
       const detail = this.formatPrismaError(error);
