@@ -19,6 +19,7 @@ export const RegisterSchema = z.object({
   tenantId: z.string().optional(),
   role: z.string().optional(),
   salonName: z.string().min(2).max(100).optional(),
+  preferredSlug: z.string().min(2).max(50).regex(/^[a-z0-9-]+$/, "Slug must be lowercase alphanumeric with hyphens").optional(),
 });
 
 export const LoginSchema = z.object({
@@ -93,7 +94,7 @@ class AuthService {
       // Auto-create salon with 1-month free trial for SALON_OWNER
       let salonData = null;
       if (data.role === "SALON_OWNER" && data.salonName) {
-        const result = await salonService.createSalonForTrial(user.id, data.salonName);
+        const result = await salonService.createSalonForTrial(user.id, data.salonName, data.preferredSlug);
         if (result.dataResponse.returnCode === eReturnCodes.R_CREATED || result.dataResponse.returnCode === eReturnCodes.R_SUCCESS) {
           salonData = result.data;
         }
