@@ -43,6 +43,7 @@ import { register, login, getProfile, refresh, logout } from "../controllers/aut
 import {
   getSalonBySlug,
   getOwnerSalon,
+  checkSlug,
   updateSalon,
   updateWorkingHours,
   getAllSalons,
@@ -119,6 +120,7 @@ router.post("/auth/logout", logout);
 router.get("/auth/profile", authenticate, getProfile);
 
 // ─── Public Salon Routes (tenant website) ────────────────────────────────────
+router.get("/salons/check-slug/:slug", checkSlug);
 router.get("/salons/slug/:slug", getSalonBySlug);
 router.get("/salons/:salonId/services", getServices);
 router.get("/salons/:salonId/slots", getAvailableSlots);

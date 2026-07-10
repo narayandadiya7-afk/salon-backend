@@ -66,6 +66,12 @@ export const updateWorkingHours = async (req: Request, res: Response) => {
   }
 };
 
+export const checkSlug = async (req: Request, res: Response) => {
+  const { slug } = req.params;
+  const result = await salonService.checkSlugAvailability(slug);
+  res.status(isSuccess(result) ? 200 : 500).json(result);
+};
+
 export const getAllSalons = async (req: Request, res: Response) => {
   const page = parseInt(req.query.page as string) || 1;
   const pageSize = parseInt(req.query.pageSize as string) || 20;

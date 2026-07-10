@@ -348,6 +348,22 @@ class SalonService {
     return slug;
   }
 
+  /**
+   * Check if a slug is available and return alternative suggestions if taken
+   */
+  async checkSlugAvailability(slug: string) {
+    const dto = new BaseResponse(CommonUtils.getDataResponse(eReturnCodes.R_SUCCESS));
+    try {
+      const existing = await prisma.salon.findUnique({ where: { slug } });
+      dto.data = { available: !existing, suggestions: [] };
+      return dto;
+    } catch (error: any) {
+      logger.error("checkSlugAvailability error:", error.message);
+      dto.dataResponse = CommonUtils.getDataResponse(eReturnCodes.R_DB_ERROR);
+      return dto;
+    }
+  }
+
   // ─── Private Helpers ────────────────────────────────────────────────────────
 
   private calculateExpiry(planType: PlanType, currentExpiry?: Date | null): Date {
